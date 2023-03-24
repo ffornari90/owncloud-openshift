@@ -1,0 +1,411 @@
+---
+kind: Template
+apiVersion: template.openshift.io/v1
+
+metadata:
+  name: owncloud-persistent
+  annotations:
+    openshift.io/display-name: ownCloud (Persistent)
+    description: >-
+      A deployment for ownCloud with MariaDB and Redis, including persistent
+      storage.
+    iconClass: icon-php
+    tags: instant-app,php,owncloud,mariadb,redis
+    openshift.io/provider-display-name: "ownCloud GmbH"
+    openshift.io/documentation-url: "https://github.com/owncloud-docker/openshift"
+    openshift.io/support-url: "https://github.com/owncloud-docker/openshift"
+message: >-
+  An ownCloud service including persistent storage has been created in your
+  project.
+
+objects:
+  - kind: ServiceAccount
+    apiVersion: v1
+    metadata:
+      name: owncloud
+  - kind: RoleBinding
+    apiVersion: rbac.authorization.k8s.io/v1
+    metadata:
+      name: owncloud-rb
+      namespace: owncloud-ns
+    subjects:
+      - kind: ServiceAccount
+        name: owncloud
+    roleRef:
+      kind: ClusterRole 
+      name: system:openshift:scc:anyuid 
+      apiGroup: rbac.authorization.k8s.io
+  - kind: Route
+    apiVersion: v1
+    metadata:
+      name: owncloud
+    spec:
+      host: owncloud-owncloud-ns.apps.cnsa.cr.cnaf.infn.it
+      to:
+        kind: Service
+        name: owncloud
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
+      port:
+        targetPort: http
+  - kind: PersistentVolumeClaim
+    apiVersion: v1
+    metadata:
+      name: owncloud
+    spec:
+      storageClassName: rook-cephfs
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 100Gi
+  - kind: Service
+    apiVersion: v1
+    metadata:
+      name: owncloud
+    spec:
+      ports:
+        - name: http
+          protocol: TCP
+          port: 8080
+          targetPort: http
+      selector:
+        app: owncloud
+  - kind: DeploymentConfig
+    apiVersion: v1
+    metadata:
+      name: owncloud
+      labels:
+        app: owncloud
+    spec:
+      strategy:
+        type: Recreate
+      triggers:
+        - type: ConfigChange
+      replicas: 1
+      selector:
+        app: owncloud
+      template:
+        metadata:
+          name: owncloud
+          labels:
+            app: owncloud
+        spec:
+          hostAliases:
+          - ip: "131.154.162.124"
+            hostnames:
+            - "iam-indigo.cr.cnaf.infn.it"
+          hostname: owncloud
+          serviceAccount: owncloud
+          containers:
+            - name: owncloud
+              image: owncloud/server:latest
+              imagePullPolicy: Always
+              command: [sh, -c]
+              args:
+                - chsh -s /bin/bash www-data &&
+                  /usr/bin/owncloud && kill $$(pgrep cron) &&
+                  su - www-data -c '/var/www/owncloud/occ config:app:set openidconnect openid-connect --value='"'"'{"auto-provision":{"enabled":true,"email-claim":"email","display-name-claim":"name"},"provider-url":"'$OWNCLOUD_OIDC_PROVIDER'","client-id":"'$OWNCLOUD_OIDC_CLIENT_ID'","client-secret":"'$OWNCLOUD_OIDC_CLIENT_SECRET'","loginButtonName":"Login via IAM","autoRedirectOnLoginPage":false,"mode":"email","search-attribute":"preferred_username"}'"'"'' &
+                  su - www-data -c '/var/www/owncloud/occ app:enable openidconnect' &&
+                  su - www-data -c '/var/www/owncloud/occ config:app:set oauth2 client_id --value='$OWNCLOUD_OIDC_CLIENT_ID &&
+                  su - www-data -c '/var/www/owncloud/occ config:app:set oauth2 client_secret --value='$OWNCLOUD_OIDC_CLIENT_SECRET &&
+                  su - www-data -c '/var/www/owncloud/occ config:app:set oauth2 authorization_endpoint --value='$OWNCLOUD_OIDC_AUTHORIZATION_ENDPOINT &&
+                  su - www-data -c '/var/www/owncloud/occ config:app:set oauth2 token_endpoint --value='$OWNCLOUD_OIDC_TOKEN_ENDPOINT &&
+                  su - www-data -c '/var/www/owncloud/occ app:enable oauth2' &&
+                  /usr/bin/entrypoint /usr/bin/owncloud server
+              securityContext:
+                runAsUser: 0 
+                serviceAccountName: "owncloud"
+              ports:
+                - name: http
+                  protocol: TCP
+                  containerPort: 8080
+              readinessProbe:
+                timeoutSeconds: 3
+                initialDelaySeconds: 60
+                failureThreshold: 60
+                exec:
+                  command:
+                    - "/usr/bin/healthcheck"
+              livenessProbe:
+                timeoutSeconds: 3
+                initialDelaySeconds: 60
+                failureThreshold: 30
+                exec:
+                  command:
+                    - "/usr/bin/healthcheck"
+              env:
+                - name: OWNCLOUD_HTTP_COOKIE_SAMESITE
+                  value: None
+                - name: OWNCLOUD_OIDC_PROVIDER
+                  value: "https://iam-indigo.cr.cnaf.infn.it"
+                - name: OWNCLOUD_OIDC_CLIENT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: owncloud-secret
+                      key: OWNCLOUD_OIDC_CLIENT_ID
+                - name: OWNCLOUD_OIDC_CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: owncloud-secret
+                      key: OWNCLOUD_OIDC_CLIENT_SECRET
+                - name: OWNCLOUD_OIDC_AUTHORIZATION_ENDPOINT
+                  value: "https://iam-indigo.cr.cnaf.infn.it/authorize"
+                - name: OWNCLOUD_OIDC_TOKEN_ENDPOINT
+                  value: "https://iam-indigo.cr.cnaf.infn.it/token"
+                - name: OWNCLOUD_TRUSTED_DOMAINS
+                  value: owncloud-owncloud-ns.apps.cnsa.cr.cnaf.infn.it
+                - name: OWNCLOUD_DOMAIN
+                  value: owncloud-owncloud-ns.apps.cnsa.cr.cnaf.infn.it
+                - name: OWNCLOUD_PROTOCOL
+                  value: https
+                - name: OWNCLOUD_CROND_ENABLED
+                  value: "false"
+                - name: OWNCLOUD_BACKGROUND_MODE
+                  value: webcron
+                - name: OWNCLOUD_DB_TYPE
+                  value: mysql
+                - name: OWNCLOUD_DB_HOST
+                  value: mariadb
+                - name: OWNCLOUD_DB_NAME
+                  value: owncloud
+                - name: OWNCLOUD_DB_USERNAME
+                  value: owncloud
+                - name: OWNCLOUD_DB_PASSWORD
+                  value: owncloud
+                - name: OWNCLOUD_REDIS_ENABLED
+                  value: "true"
+                - name: OWNCLOUD_REDIS_HOST
+                  value: redis
+                - name: OWNCLOUD_REDIS_PORT
+                  value: "6379"
+                - name: OWNCLOUD_VOLUME_ROOT
+                  value: "/var/lib/owncloud"
+                - name: OWNCLOUD_LOG_FILE
+                  value: "/dev/stdout"
+                - name: OWNCLOUD_ADMIN_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: owncloud-secret
+                      key: OWNCLOUD_ADMIN_USERNAME
+                - name: OWNCLOUD_ADMIN_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: owncloud-secret
+                      key: OWNCLOUD_ADMIN_PASSWORD
+                - name: OWNCLOUD_SESSION_SAVE_HANDLER
+                  value: redis
+                - name: OWNCLOUD_SESSION_SAVE_PATH
+                  value: tcp://redis:6379?database=1
+                - name: OWNCLOUD_SKIP_CHOWN
+                  value: "true"
+              volumeMounts:
+                - name: data
+                  mountPath: "/var/lib/owncloud"
+              securityContext:
+                allowPrivilegeEscalation: false
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: owncloud
+  - kind: PersistentVolumeClaim
+    apiVersion: v1
+    metadata:
+      name: mariadb
+    spec:
+      storageClassName: rook-cephfs
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
+  - kind: Service
+    apiVersion: v1
+    metadata:
+      name: mariadb
+    spec:
+      ports:
+        - name: mariadb
+          protocol: TCP
+          port: 3306
+          targetPort: mariadb
+      selector:
+        app: mariadb
+  - kind: DeploymentConfig
+    apiVersion: v1
+    metadata:
+      name: mariadb
+    spec:
+      strategy:
+        type: Recreate
+      triggers:
+        - type: ConfigChange
+      replicas: 1
+      selector:
+        app: mariadb
+      template:
+        metadata:
+          name: mariadb
+          labels:
+            app: mariadb
+        spec:
+          hostname: mariadb
+          containers:
+            - name: mariadb
+              image: docker.io/mariadb:10.6
+              imagePullPolicy: Always
+              ports:
+                - name: mariadb
+                  protocol: TCP
+                  containerPort: 3306
+              env:
+                - name: MYSQL_ROOT_PASSWORD
+                  value: owncloud
+                - name: MYSQL_USER
+                  value: owncloud
+                - name: MYSQL_PASSWORD
+                  value: owncloud
+                - name: MYSQL_DATABASE
+                  value: owncloud
+              volumeMounts:
+                - name: data
+                  mountPath: "/var/lib/mysql"
+              securityContext:
+                allowPrivilegeEscalation: false
+            - name: healthcheck
+              image: docker.io/healthcheck/mysql:latest
+              imagePullPolicy: Always
+              command:
+                - "/bin/bash"
+                - "-c"
+              args:
+                - "trap : TERM INT; sleep infinity & wait"
+              env:
+                - name: MYSQL_USER
+                  value: root
+                - name: MYSQL_PASSWORD
+                  value: owncloud
+              readinessProbe:
+                timeoutSeconds: 3
+                initialDelaySeconds: 60
+                failureThreshold: 30
+                exec:
+                  command:
+                    - "/usr/local/bin/docker-healthcheck"
+              livenessProbe:
+                timeoutSeconds: 3
+                initialDelaySeconds: 60
+                failureThreshold: 30
+                exec:
+                  command:
+                    - "/usr/local/bin/docker-healthcheck"
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: mariadb
+  - kind: PersistentVolumeClaim
+    apiVersion: v1
+    metadata:
+      name: redis
+    spec:
+      storageClassName: rook-cephfs
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+  - kind: Service
+    apiVersion: v1
+    metadata:
+      name: redis
+    spec:
+      ports:
+        - name: redis
+          protocol: TCP
+          port: 6379
+          targetPort: redis
+      selector:
+        app: redis
+  - kind: DeploymentConfig
+    apiVersion: v1
+    metadata:
+      name: redis
+      labels:
+        app: redis
+    spec:
+      strategy:
+        type: Recreate
+      triggers:
+        - type: ConfigChange
+      replicas: 1
+      selector:
+        app: redis
+      template:
+        metadata:
+          name: redis
+          labels:
+            app: redis
+        spec:
+          hostname: redis
+          containers:
+            - name: redis
+              image: docker.io/redis:6.0
+              imagePullPolicy: Always
+              ports:
+                - name: redis
+                  protocol: TCP
+                  containerPort: 6379
+              volumeMounts:
+                - name: data
+                  mountPath: "/data"
+              securityContext:
+                allowPrivilegeEscalation: false
+            - name: healthcheck
+              image: docker.io/healthcheck/redis:latest
+              imagePullPolicy: Always
+              command:
+                - "/bin/bash"
+                - "-c"
+              args:
+                - "trap : TERM INT; sleep infinity & wait"
+              readinessProbe:
+                timeoutSeconds: 3
+                initialDelaySeconds: 60
+                failureThreshold: 30
+                exec:
+                  command:
+                    - "/usr/local/bin/docker-healthcheck"
+              livenessProbe:
+                timeoutSeconds: 3
+                initialDelaySeconds: 60
+                failureThreshold: 30
+                exec:
+                  command:
+                    - "/usr/local/bin/docker-healthcheck"
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: redis
+  - kind: CronJob
+    apiVersion: batch/v1beta1
+    metadata:
+      name: webcron
+    spec:
+      schedule: "*/15 * * * *"
+      successfulJobsHistoryLimit: 0
+      failedJobsHistoryLimit: 5
+      jobTemplate:
+        spec:
+          template:
+            spec:
+              restartPolicy: OnFailure
+              containers:
+                - name: webcron
+                  image: owncloud/server:latest
+                  args:
+                    - curl
+                    - http://owncloud:8080/cron.php
+
+labels:
+  template: owncloud-persistent-template
