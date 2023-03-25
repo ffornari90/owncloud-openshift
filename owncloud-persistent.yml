@@ -102,11 +102,17 @@ objects:
             - name: owncloud
               image: owncloud/server:latest
               imagePullPolicy: Always
-              command: [sh, -c]
+              command:
+                - /bin/sh
+                - -c
               args:
-                - chsh -s /bin/bash www-data &&
-                  /usr/bin/owncloud && kill $$(pgrep cron) &&
-                  su - www-data -c '/var/www/owncloud/occ config:app:set openidconnect openid-connect --value='"'"'{"auto-provision":{"enabled":true,"email-claim":"email","display-name-claim":"name"},"provider-url":"'$OWNCLOUD_OIDC_PROVIDER'","client-id":"'$OWNCLOUD_OIDC_CLIENT_ID'","client-secret":"'$OWNCLOUD_OIDC_CLIENT_SECRET'","loginButtonName":"Login via IAM","autoRedirectOnLoginPage":false,"mode":"email","search-attribute":"preferred_username"}'"'"'' &
+                - apt-get update && apt-get install -y wget && apt-get clean &&
+                  wget -q -O - "https://dist.eugridpma.info/distribution/igtf/current/GPG-KEY-EUGridPMA-RPM-3" | apt-key add - &&
+                  echo "deb http://repository.egi.eu/sw/production/cas/1/current egi-igtf core" > /etc/apt/sources.list.d/ca-repo.list &&
+                  apt-get update && apt-get install -y ca-policy-egi-core && apt-get clean &&
+                  for f in $(find /etc/grid-security/certificates -type f -name '*.pem'); do filename="${f##*/}"; cp $f /usr/local/share/ca-certificates/"${filename%.*}.crt"; done &&
+                  update-ca-certificates && chsh -s /bin/bash www-data && /usr/bin/owncloud &&
+                  su - www-data -c '/var/www/owncloud/occ config:app:set openidconnect openid-connect --value='"'"'{"auto-provision":{"enabled":true,"email-claim":"email","display-name-claim":"name"},"provider-url":"'$OWNCLOUD_OIDC_PROVIDER'","client-id":"'$OWNCLOUD_OIDC_CLIENT_ID'","client-secret":"'$OWNCLOUD_OIDC_CLIENT_SECRET'","loginButtonName":"Login via IAM","autoRedirectOnLoginPage":false,"mode":"email","search-attribute":"preferred_username"}'"'"'' &&
                   su - www-data -c '/var/www/owncloud/occ app:enable openidconnect' &&
                   su - www-data -c '/var/www/owncloud/occ config:app:set oauth2 client_id --value='$OWNCLOUD_OIDC_CLIENT_ID &&
                   su - www-data -c '/var/www/owncloud/occ config:app:set oauth2 client_secret --value='$OWNCLOUD_OIDC_CLIENT_SECRET &&
@@ -199,7 +205,7 @@ objects:
                 - name: OWNCLOUD_SESSION_SAVE_PATH
                   value: tcp://redis:6379?database=1
                 - name: OWNCLOUD_SKIP_CHOWN
-                  value: "true"
+                  value: "false"
               volumeMounts:
                 - name: data
                   mountPath: "/var/lib/owncloud"

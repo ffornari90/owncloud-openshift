@@ -1,3 +1,3 @@
-# k8s-owncloud
+# owncloud-openshift
 
-Project to deploy Owncloud on Kubernetes/OpenShift.
+Project to deploy Owncloud on OpenShift.
